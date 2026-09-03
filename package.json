@@ -1,0 +1,10 @@
+{
+  "name":"hamugang-vercel-cloud",
+  "version":"1.0.0",
+  "private":true,
+  "engines":{"node":">=20"},
+  "dependencies":{
+    "@neondatabase/serverless":"^1.0.0",
+    "jsonwebtoken":"^9.0.2"
+  }
+}
