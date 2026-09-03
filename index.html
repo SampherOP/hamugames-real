@@ -4875,11 +4875,9 @@ try{attachGlobalSocialListeners()}catch(_){ }
     }catch(e){console.warn('local profile cache',e);}
   }
   async function writeProfile(u,p){
-    const updates={};
-    updates['users/'+u.uid]=p;
-    updates['publicUsers/'+u.uid]=publicProfile(p);
-    updates['usernames/'+key(p.username)]={uid:u.uid,email:u.email,username:p.username};
-    await HAMUCloud.database().ref().update(updates);
+    await HAMUCloud.database().ref('users/'+u.uid).set(p);
+    await HAMUCloud.database().ref('publicUsers/'+u.uid).set(publicProfile(p));
+    await HAMUCloud.database().ref('usernames/'+key(p.username)).set({uid:u.uid,email:u.email,username:p.username});
   }
 
   async function recoverProfile(u){
