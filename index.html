@@ -1641,7 +1641,7 @@
           let listeners = [];
           const timers = new Map();
           const headers=()=>token?{'Authorization':'Bearer '+token,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
-          async function req(path,body){const r=await fetch(API+path,{method:'POST',headers:headers(),body:JSON.stringify(body||{})});const text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch(_){j={error:'request_failed',details:text.slice(0,240)}}if(!r.ok){const e=new Error(j.error||'request_failed');e.code=j.error||'';e.status=r.status;e.details=j.details||'';throw e}return j;}
+          async function req(path,body){const isGet=!body&&/\/auth\/me$/.test(path);const opts={method:isGet?'GET':'POST',headers:headers()};if(!isGet)opts.body=JSON.stringify(body||{});let r;try{r=await fetch(API+path,opts);}catch(e){const x=new Error('network_request_failed');x.code='auth/network-request-failed';throw x;}const text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch(_){j={error:'request_failed',details:text.slice(0,500)}}if(!r.ok){const e=new Error(j.error||('request_failed_'+r.status));e.code=j.error||'';e.status=r.status;e.details=j.details||'';throw e}return j;}
           class Snap{constructor(value,key=''){this._v=value;this.key=key;}val(){return this._v;}exists(){return this._v!==null&&this._v!==undefined;}child(k){const v=this._v&&typeof this._v==='object'?this._v[k]:undefined;return new Snap(v===undefined?null:v,k);}forEach(fn){if(!this._v||typeof this._v!=='object')return false;for(const [k,v] of Object.entries(this._v)){if(fn(new Snap(v,k))===true)break;}return true;}}
           function mark(v){if(v===HAMUCloud.database.ServerValue.TIMESTAMP)return {'.sv':'timestamp'};if(v===HAMUCloud.database.ServerValue.increment(1))return {'.sv':{increment:1}};return v;}
           class Ref{constructor(path){this.path=String(path||'').replace(/^\/+|\/+$/g,'');} child(k){return new Ref(this.path+'/'+String(k));} push(value){const r=new Ref(this.path);r.key=crypto.randomUUID().replace(/-/g,'').slice(0,20);r._pending=value;r.set=async(v)=>req('/db/write',{path:r.path+'/'+r.key,value:mark(v)}).then(()=>undefined);if(value!==undefined)r.set(value);return r;} limitToLast(){return this;} onDisconnect(){return {set:async()=>{},update:async()=>{},remove:async()=>{}};} async set(v){return req('/db/write',{path:this.path,value:mark(v)}).then(()=>undefined);} async update(v){return req('/db/update',{path:this.path,value:mark(v)}).then(()=>undefined);} async remove(){return req('/db/remove',{path:this.path}).then(()=>undefined);} async once(){const j=await req('/db/read',{path:this.path});return new Snap(j.value,this.path.split('/').pop()||'');} async transaction(fn){const snap=await this.once();let next=fn(snap.val());if(next===undefined)return {committed:false,snapshot:snap};const j=await req('/db/transaction',{path:this.path,value:mark(next)});return {committed:!!j.committed,snapshot:new Snap(j.value,this.path.split('/').pop()||'')};} on(event,cb){if(event!=='value')return this;const key=this.path+'::'+String(cb);const run=async()=>{try{const snap=await this.once();cb(snap);}catch(e){console.warn('[HAMUCloud listener]',e.message)}};run();const id=setInterval(run,2000);timers.set(key,{id,cb});listeners.push({ref:this,cb,key});return this;} off(event,cb){for(const [k,v] of [...timers]){if(k.startsWith(this.path+'::')&&(!cb||v.cb===cb)){clearInterval(v.id);timers.delete(k);}}listeners=listeners.filter(x=>x.ref!==this|| (cb&&x.cb!==cb));return this;}}
@@ -4956,10 +4956,9 @@ try{attachGlobalSocialListeners()}catch(_){ }
       if(isLoginMode){
         let email=identifier.toLowerCase();
         if(!identifier.includes('@')){
-          const s=await db('usernames/'+key(identifier)).once('value');
-          const m=s.val();
-          if(!m?.email) throw new Error('USERNAME_NOT_FOUND');
-          email=String(m.email).toLowerCase();
+          const lookup=await auth.lookupUsername(identifier);
+          if(!lookup?.email) throw new Error('USERNAME_NOT_FOUND');
+          email=String(lookup.email).toLowerCase();
         }
         if(!emailRe.test(email)) throw new Error('BAD_EMAIL');
         const cred=await auth.signInWithEmailAndPassword(email,password);
@@ -4976,22 +4975,16 @@ try{attachGlobalSocialListeners()}catch(_){ }
       if(!emailRe.test(email)) throw new Error('BAD_EMAIL');
       if(password.length<6) throw new Error('WEAK_PASSWORD');
 
-      // Reserve the username before creating Auth so a taken name never creates
-      // an orphan HAMUCloud Authentication account.
-      const usernameRef=db('usernames/'+key(username));
-      const existing=await usernameRef.once('value');
-      if(existing.exists()) throw new Error('USERNAME_TAKEN');
-
+      // Username availability is checked by the authenticated registration API.
+      // Do NOT read /usernames here: a new visitor has no JWT yet.
       let cred;
-      try{cred=await auth.createUserWithEmailAndPassword(email,password);}
+      try{cred=await auth.createUserWithEmailAndPassword(email,password,username);}
       catch(e){throw e;}
       const u=cred.user;
       if(!u?.uid) throw new Error('AUTH_UID_MISSING');
 
       try{
-        // IMPORTANT: username is included. The supplied Rules validate it.
-        const claim=await usernameRef.transaction(v=>v===null?{uid:u.uid,email,username}:undefined);
-        if(!claim.committed) throw new Error('USERNAME_TAKEN');
+        // The registration API already atomically creates the username mapping.
         const p=profileDefaults(u,username);
         await HAMUCloud.database().ref().update({
           ['users/'+u.uid]:p,
